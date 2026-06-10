@@ -109,6 +109,16 @@ parser.add_argument("--require_correlation", action="store_true", default=False,
                     help="Only enter when NVDA and SPY prior-day direction aligns with signal")
 parser.add_argument("--skip_high_vol", action=argparse.BooleanOptionalAction, default=True,
                     help="Skip days where prior session range > 2x 20-day average (default True)")
+parser.add_argument("--skipped_day_mode", action="store_true", default=False,
+                    help="Trade formerly skipped news/high-vol/cooldown days with stricter entry rules")
+parser.add_argument("--skipped_day_no_shorts_before", type=str, default="08:00",
+                    help="In skipped-day mode, block short entries before this ET time (HH:MM, default 08:00)")
+parser.add_argument("--skipped_day_skip_first_signal", action=argparse.BooleanOptionalAction, default=True,
+                    help="In skipped-day mode, ignore the first qualifying signal of the day (default True)")
+parser.add_argument("--skipped_day_longs_only", action="store_true", default=False,
+                    help="In skipped-day mode, skip all short entries while leaving normal days unchanged")
+parser.add_argument("--skipped_day_size_multiplier", type=float, default=1.0,
+                    help="Position-size multiplier for skipped-day-mode trades (default 1.0)")
 parser.add_argument("--fomc_buffer_before", type=int, default=0,
                     help="Extra trading days to black out BEFORE each FOMC date (default 0)")
 parser.add_argument("--fomc_buffer_after",  type=int, default=0,
@@ -124,8 +134,6 @@ parser.add_argument("--skip_two_stop_day", action="store_true", default=False,
                     help="If both daily trades stop out, skip the next trading day")
 parser.add_argument("--max_weekly_loss_pts", type=float, default=0.0,
                     help="Stop trading for the rest of the week once down this many pts (0=off)")
-parser.add_argument("--skip_first_signal", action="store_true", default=False,
-                    help="Skip the first qualifying signal each day. Trade #2+ only.")
 # ── OR5L Trailing Stop ────────────────────────────────────────────────────────
 parser.add_argument("--or5l_trail",       action="store_true", default=False,
                     help="Runner uses trailing stop instead of fixed target (all trade types)")
@@ -201,6 +209,19 @@ parser.add_argument("--real_delta", action="store_true", default=False,
                          "instead of proxy delta columns. Requires NQ_1m_footprint_real_delta.csv.")
 args = parser.parse_args()
 
+def _parse_hhmm_to_mins_from_open(value: str) -> int:
+    try:
+        hour_s, min_s = value.split(":", 1)
+        hour = int(hour_s)
+        minute = int(min_s)
+    except ValueError:
+        raise SystemExit(f"Invalid HH:MM time: {value!r}")
+    if not (0 <= hour <= 23 and 0 <= minute <= 59):
+        raise SystemExit(f"Invalid HH:MM time: {value!r}")
+    return (hour - 9) * 60 + minute - 30
+
+SKIPPED_DAY_NO_SHORTS_BEFORE_MINS = _parse_hhmm_to_mins_from_open(args.skipped_day_no_shorts_before)
+
 def contracts_for(mins_from_open=0, session_tag=None):
     """Return contract count for a trade based on time window and session."""
     if args.power_hour_contracts > 0 and 30 <= mins_from_open <= 90:
@@ -208,6 +229,13 @@ def contracts_for(mins_from_open=0, session_tag=None):
     if args.afternoon_start_mins > 0 and (session_tag == 'pm' or mins_from_open >= args.afternoon_start_mins):
         return args.afternoon_contracts
     return args.contracts
+
+def size_multiplier_for_trade(t: dict) -> float:
+    return float(t.get('size_multiplier', 1.0) or 1.0)
+
+def dollars_for_trade(t: dict) -> float:
+    contracts = contracts_for(t.get('mins_from_open', 0), t.get('session'))
+    return t['net_pts'] * contracts * args.tick_value * size_multiplier_for_trade(t)
 
 # ── Per-level ratio lookup ────────────────────────────────────────────────────
 # Each level type gets its own minimum POC ratio. Falls back to args.min_ratio
@@ -1162,11 +1190,17 @@ def run_backtest():
           f" | POC position: {'on' if args.poc_position_gate else 'off'}"
           f" | Abs vol/delta: {args.min_bar_volume:g}/{args.min_bar_delta:g}"
           f" | Vol mode: {args.vol_mode_override or ('QQQ CSV' if args.qqq_vol_csv else 'NQ proxy (no override)')}")
+    if args.skipped_day_mode:
+        print(f"  Skipped-day mode: on | no shorts before {args.skipped_day_no_shorts_before} ET"
+              f" | skip first signal: {'on' if args.skipped_day_skip_first_signal else 'off'}"
+              f" | longs only: {'on' if args.skipped_day_longs_only else 'off'}"
+              f" | size multiplier: {args.skipped_day_size_multiplier:g}")
     print()
 
     # QQQ volume data (Feature 2+3)
     qqq_vol_data   = load_qqq_vol(args.qqq_vol_csv)
     vol_mode_counts = {'SKIP': 0, 'LOW_VOL': 0, 'NORMAL': 0, 'HIGH_VOL': 0}
+    skipped_day_counts = {'news': 0, 'cooldown': 0, 'high_vol': 0}
 
     # ── Local trade tracking ──────────────────────────────────────────────────
     trades = []
@@ -1246,9 +1280,15 @@ def run_backtest():
         if args.end_date and date > _dt.date.fromisoformat(args.end_date):
             continue
 
+        skipped_day_active = False
+        skipped_day_reasons = []
         if args.skip_news and date in NEWS_BLACKOUT_DATES:
-            print(f"  {date}  — SKIPPED (news blackout)")
-            continue
+            if args.skipped_day_mode:
+                skipped_day_active = True
+                skipped_day_reasons.append('news')
+            else:
+                print(f"  {date}  — SKIPPED (news blackout)")
+                continue
 
         # QQQ vol mode for this day (Features 2+3)
         vol_mode = get_vol_mode(date, qqq_vol_data, df)
@@ -1269,8 +1309,12 @@ def run_backtest():
         # Max consecutive losses -> skip this day
         if skip_next_day:
             skip_next_day = False
-            print(f"  {date}  — SKIPPED (loss-control cooldown)")
-            continue
+            if args.skipped_day_mode:
+                skipped_day_active = True
+                skipped_day_reasons.append('cooldown')
+            else:
+                print(f"  {date}  — SKIPPED (loss-control cooldown)")
+                continue
 
         # Weekly loss cap -> skip rest of week
         if args.max_weekly_loss_pts > 0 and week_pts <= -args.max_weekly_loss_pts:
@@ -1287,8 +1331,17 @@ def run_backtest():
                 if prev_date in sess_hl.index and not pd.isna(sess_hl.loc[prev_date, 's_range']):
                     yrange = float(sess_hl.loc[prev_date, 's_range'])
                     if yrange > 2 * avg_range:
-                        print(f"  {date}  HIGH VOL SKIPPED (range={yrange:.0f} vs 20d-avg={avg_range:.0f})")
-                        continue
+                        if args.skipped_day_mode:
+                            skipped_day_active = True
+                            skipped_day_reasons.append('high_vol')
+                        else:
+                            print(f"  {date}  HIGH VOL SKIPPED (range={yrange:.0f} vs 20d-avg={avg_range:.0f})")
+                            continue
+
+        if skipped_day_active:
+            for reason in skipped_day_reasons:
+                skipped_day_counts[reason] = skipped_day_counts.get(reason, 0) + 1
+            print(f"  {date}  SKIPPED-DAY MODE ({'+'.join(skipped_day_reasons)})")
 
         # All session bars from exact open (for Judas swing tracking + VWAP)
         open_mask = (df['_date'] == date) & (df['_mins_from_open'] >= 0)
@@ -1330,6 +1383,7 @@ def run_backtest():
         day_consec_losses = 0
         signals_seen = 0
         signals_absorbed = 0
+        skipped_day_qualified_signals = 0
         day_had_setup = False
         # Break-and-retest state: active pending breaks this day
         # key=(round_lvl, level_name), val={level_px, level_name, direction, age}
@@ -1393,10 +1447,6 @@ def run_backtest():
                         continue
                     if args.long_bias and dirn == 'short' and trend != 'short':
                         continue
-                    # Skip first signal of the day
-                    if args.skip_first_signal and trades_today == 0:
-                        continue
-
                     # Retest confirmed — enter
                     entry_px = float(bar['close'])
                     lname    = bst['level_name']
@@ -1405,6 +1455,16 @@ def run_backtest():
                             dirn, bar.get('poc_price', 0), lvl_px, entry_px)
                         if not poc_ok:
                             continue
+                    bar_mins = int(bar['_mins_from_open'])
+                    if skipped_day_active:
+                        if dirn == 'short' and (args.skipped_day_longs_only or bar_mins < SKIPPED_DAY_NO_SHORTS_BEFORE_MINS):
+                            del pending_breaks[bkey]
+                            continue
+                        if args.skipped_day_skip_first_signal and skipped_day_qualified_signals == 0:
+                            skipped_day_qualified_signals += 1
+                            del pending_breaks[bkey]
+                            continue
+                        skipped_day_qualified_signals += 1
                     result   = sim_trade(df, idx, dirn, entry_px, vol_mode=vol_mode, level_name=lname)
                     dt_str   = str(bar['_est'])[:16]
                     trade = {
@@ -1417,8 +1477,11 @@ def run_backtest():
                         'ratio':      ratio,
                         'trade_number': trades_today + 1,
                         'setup_type': 'retest',
-                        'mins_from_open': int(bar['_mins_from_open']),
+                        'mins_from_open': bar_mins,
                         'session':    'pm' if args.afternoon_start_mins > 0 and bar['_mins_from_open'] >= args.afternoon_start_mins else 'am',
+                        'skipped_day': skipped_day_active,
+                        'skipped_day_reasons': '+'.join(skipped_day_reasons),
+                        'size_multiplier': args.skipped_day_size_multiplier if skipped_day_active else 1.0,
                         **result,
                     }
                     trades.append(trade)
@@ -1439,7 +1502,7 @@ def run_backtest():
                         if args.intraday_stop_after > 0 and day_consec_losses >= args.intraday_stop_after:
                             trades_today = args.max_per_day
                     icon = '+' if result['net_pts'] > 0 else '-'
-                    dval = result['net_pts'] * contracts_for(bar['_mins_from_open']) * args.tick_value
+                    dval = dollars_for_trade(trade)
                     print(f"  {date}  {dirn:<5}  {lname:<10}  ratio={ratio:.1f}:1  "
                           f"[RETEST/{vol_mode}]  {icon}  "
                           f"{result['net_pts']:+6.2f}pts ({dval:+,.0f}$)  exit={result['exit_reason']}")
@@ -1527,10 +1590,6 @@ def run_backtest():
                 if not valid:
                     continue
 
-            # Skip first signal of the day
-            if args.skip_first_signal and trades_today == 0:
-                continue
-
             # Entry at close of confirming bar
             entry_px = bar['close']
             if args.poc_position_gate:
@@ -1538,6 +1597,14 @@ def run_backtest():
                     direction, bar.get('poc_price', 0), level_px, entry_px)
                 if not poc_ok:
                     continue
+            bar_mins = int(bar['_mins_from_open'])
+            if skipped_day_active:
+                if direction == 'short' and (args.skipped_day_longs_only or bar_mins < SKIPPED_DAY_NO_SHORTS_BEFORE_MINS):
+                    continue
+                if args.skipped_day_skip_first_signal and skipped_day_qualified_signals == 0:
+                    skipped_day_qualified_signals += 1
+                    continue
+                skipped_day_qualified_signals += 1
             result = sim_trade(df, idx, direction, entry_px, vol_mode=vol_mode, level_name=level_name)
 
             dt_str = str(bar['_est'])[:16]
@@ -1552,8 +1619,11 @@ def run_backtest():
                 'ratio':       ratio,
                 'trade_number': trades_today + 1,
                 'setup_type':  'first_touch',
-                'mins_from_open': int(bar['_mins_from_open']),
+                'mins_from_open': bar_mins,
                 'session':     'pm' if args.afternoon_start_mins > 0 and bar['_mins_from_open'] >= args.afternoon_start_mins else 'am',
+                'skipped_day': skipped_day_active,
+                'skipped_day_reasons': '+'.join(skipped_day_reasons),
+                'size_multiplier': args.skipped_day_size_multiplier if skipped_day_active else 1.0,
                 **result,
             }
             trades.append(trade)
@@ -1575,7 +1645,7 @@ def run_backtest():
                     trades_today = args.max_per_day
 
             icon = '+' if result['net_pts'] > 0 else '-'
-            dval = result['net_pts'] * contracts_for(bar['_mins_from_open']) * args.tick_value
+            dval = dollars_for_trade(trade)
             print(f"  {date}  {direction:<5}  {level_name:<10}  ratio={ratio:.1f}:1  "
                   f"{icon}  {result['net_pts']:+6.2f}pts ({dval:+,.0f}$)  exit={result['exit_reason']}")
 
@@ -1598,9 +1668,7 @@ def run_backtest():
 
     pt_val     = args.contracts * args.tick_value
     total_pts  = sum(nets)
-    def _contracts(t):
-        return contracts_for(t.get('mins_from_open', 0), t.get('session'))
-    total_dol  = sum(t['net_pts'] * _contracts(t) * args.tick_value for t in trades)
+    total_dol  = sum(dollars_for_trade(t) for t in trades)
     wr_pct     = len(wins) / max(1, len(nets)) * 100
 
     if trades:
@@ -1617,8 +1685,7 @@ def run_backtest():
 
     equity = 0.0; peak = 0.0; max_dd_dol = 0.0
     for t in trades:
-        c = contracts_for(t.get('mins_from_open', 0), t.get('session'))
-        dol = t['net_pts'] * c * args.tick_value
+        dol = dollars_for_trade(t)
         equity += dol
         peak = max(peak, equity)
         max_dd_dol = max(max_dd_dol, peak - equity)
@@ -1646,8 +1713,10 @@ def run_backtest():
     print(f"  Worst trade:      {worst_pts:+.2f}pts (${worst_pts*pt_val:+,.0f})")
     print(f"  Avg RR (wins):    {sum(rrs)/max(1,len(rrs)):.2f}x")
 
-    total_days = len([d for d in sorted(levels_by_day.keys())
-                      if not (args.skip_news and d in NEWS_BLACKOUT_DATES)])
+    total_days = len([
+        d for d in sorted(levels_by_day.keys())
+        if args.skipped_day_mode or not (args.skip_news and d in NEWS_BLACKOUT_DATES)
+    ])
     print(f"  Days with setup:  {days_with_setup}/{total_days}")
 
     if level_type_hits:
@@ -1668,6 +1737,9 @@ def run_backtest():
         total_vol_days = sum(vol_mode_counts.values())
         parts = [f"{k}:{v}" for k, v in vol_mode_counts.items() if v]
         print(f"  Vol mode days:        {total_vol_days} total — {', '.join(parts)}")
+    if args.skipped_day_mode and any(skipped_day_counts.values()):
+        parts = [f"{k}:{v}" for k, v in skipped_day_counts.items() if v]
+        print(f"  Skipped-day mode days: {', '.join(parts)}")
     if args.require_correlation and not corr_data:
         print(f"\n  Note: Nvidia/SPY filter NOT applied (no data).")
         print(f"  Live trading would add that filter — expect fewer but better trades.")
@@ -1680,11 +1752,10 @@ def run_backtest():
         fieldnames = [
             'trade_n', 'trade_number', 'date', 'datetime',
             'setup_type', 'direction', 'level_name', 'level_px', 'entry_px',
-            'session', 'poc_ratio', 'net_pts', 'net_dollars', 'exit_reason', 'trim1_hit',
+            'session', 'skipped_day', 'skipped_day_reasons', 'size_multiplier',
+            'poc_ratio', 'net_pts', 'net_dollars', 'exit_reason', 'trim1_hit',
             'trim2_hit', 'realized_rr', 'result', 'runner_peak_pts',
         ]
-        def _csv_contracts(t):
-            return contracts_for(t.get('mins_from_open', 0), t.get('session'))
         for t in trades:
             rows.append({
                 'trade_n':      t['n'],
@@ -1697,9 +1768,12 @@ def run_backtest():
                 'level_px':     t['level_px'],
                 'entry_px':     t['entry_px'],
                 'session':      t.get('session', 'am'),
+                'skipped_day':  t.get('skipped_day', False),
+                'skipped_day_reasons': t.get('skipped_day_reasons', ''),
+                'size_multiplier': size_multiplier_for_trade(t),
                 'poc_ratio':    t['ratio'],
                 'net_pts':      t['net_pts'],
-                'net_dollars':  round(t['net_pts'] * _csv_contracts(t) * args.tick_value, 2),
+                'net_dollars':  round(dollars_for_trade(t), 2),
                 'exit_reason':  t['exit_reason'],
                 'trim1_hit':    t['trim1_hit'],
                 'trim2_hit':    t['trim2_hit'],
