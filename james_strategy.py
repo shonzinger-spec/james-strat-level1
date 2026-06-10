@@ -118,18 +118,14 @@ parser.add_argument("--tick_value", type=float, default=2.0, help="$ per point p
 # ── Loss-control rules ────────────────────────────────────────────────────────
 parser.add_argument("--max_consec_losses", type=int, default=0,
                     help="Skip next trading day after N consecutive losses (0=off)")
-parser.add_argument("--intraday_stop_after", type=int, default=99,
-                    help="Stop trading for the rest of the session after N consecutive losses within a day (default 99=off)")
+parser.add_argument("--intraday_stop_after", type=int, default=1,
+                    help="Stop trading for the rest of the session after N consecutive losses within a day (default 1)")
 parser.add_argument("--skip_two_stop_day", action="store_true", default=False,
                     help="If both daily trades stop out, skip the next trading day")
 parser.add_argument("--max_weekly_loss_pts", type=float, default=0.0,
                     help="Stop trading for the rest of the week once down this many pts (0=off)")
 parser.add_argument("--skip_first_signal", action="store_true", default=False,
                     help="Skip the first qualifying signal each day. Trade #2+ only.")
-parser.add_argument("--eqh_min_hour", type=float, default=0,
-                    help="Skip EQH signals before this hour ET (e.g. 8 = no EQH before 8am). 0=off.")
-parser.add_argument("--level_scale", action="store_true", default=False,
-                    help="Scale contract size by level quality: +20% for OB_HIGH/OB_LOW, -20% for EQH/EQL")
 # ── OR5L Trailing Stop ────────────────────────────────────────────────────────
 parser.add_argument("--or5l_trail",       action="store_true", default=False,
                     help="Runner uses trailing stop instead of fixed target (all trade types)")
@@ -205,20 +201,13 @@ parser.add_argument("--real_delta", action="store_true", default=False,
                          "instead of proxy delta columns. Requires NQ_1m_footprint_real_delta.csv.")
 args = parser.parse_args()
 
-def contracts_for(mins_from_open=0, session_tag=None, level_name=None):
-    """Return contract count for a trade based on time window, session, and level."""
-    base = args.contracts
+def contracts_for(mins_from_open=0, session_tag=None):
+    """Return contract count for a trade based on time window and session."""
     if args.power_hour_contracts > 0 and 30 <= mins_from_open <= 90:
-        base = args.power_hour_contracts
+        return args.power_hour_contracts
     if args.afternoon_start_mins > 0 and (session_tag == 'pm' or mins_from_open >= args.afternoon_start_mins):
-        base = args.afternoon_contracts
-
-    if args.level_scale and level_name:
-        if level_name in ('OB_HIGH', 'OB_LOW'):
-            base = int(round(base * 1.2))
-        elif level_name in ('EQH', 'EQL'):
-            base = int(round(base * 0.8))
-    return max(base, 1)
+        return args.afternoon_contracts
+    return args.contracts
 
 # ── Per-level ratio lookup ────────────────────────────────────────────────────
 # Each level type gets its own minimum POC ratio. Falls back to args.min_ratio
@@ -1407,9 +1396,6 @@ def run_backtest():
                     # Skip first signal of the day
                     if args.skip_first_signal and trades_today == 0:
                         continue
-                    # EQH time filter
-                    if args.eqh_min_hour > 0 and lname == 'EQH' and float(bar['_hour']) + float(bar['_min'])/60 < args.eqh_min_hour:
-                        continue
 
                     # Retest confirmed — enter
                     entry_px = float(bar['close'])
@@ -1453,7 +1439,7 @@ def run_backtest():
                         if args.intraday_stop_after > 0 and day_consec_losses >= args.intraday_stop_after:
                             trades_today = args.max_per_day
                     icon = '+' if result['net_pts'] > 0 else '-'
-                    dval = result['net_pts'] * contracts_for(bar['_mins_from_open'], level_name=lname) * args.tick_value
+                    dval = result['net_pts'] * contracts_for(bar['_mins_from_open']) * args.tick_value
                     print(f"  {date}  {dirn:<5}  {lname:<10}  ratio={ratio:.1f}:1  "
                           f"[RETEST/{vol_mode}]  {icon}  "
                           f"{result['net_pts']:+6.2f}pts ({dval:+,.0f}$)  exit={result['exit_reason']}")
@@ -1544,9 +1530,6 @@ def run_backtest():
             # Skip first signal of the day
             if args.skip_first_signal and trades_today == 0:
                 continue
-            # EQH time filter
-            if args.eqh_min_hour > 0 and level_name == 'EQH' and float(bar['_hour']) + float(bar['_min'])/60 < args.eqh_min_hour:
-                continue
 
             # Entry at close of confirming bar
             entry_px = bar['close']
@@ -1592,7 +1575,7 @@ def run_backtest():
                     trades_today = args.max_per_day
 
             icon = '+' if result['net_pts'] > 0 else '-'
-            dval = result['net_pts'] * contracts_for(bar['_mins_from_open'], level_name=level_name) * args.tick_value
+            dval = result['net_pts'] * contracts_for(bar['_mins_from_open']) * args.tick_value
             print(f"  {date}  {direction:<5}  {level_name:<10}  ratio={ratio:.1f}:1  "
                   f"{icon}  {result['net_pts']:+6.2f}pts ({dval:+,.0f}$)  exit={result['exit_reason']}")
 
@@ -1616,7 +1599,7 @@ def run_backtest():
     pt_val     = args.contracts * args.tick_value
     total_pts  = sum(nets)
     def _contracts(t):
-        return contracts_for(t.get('mins_from_open', 0), t.get('session'), t.get('level_name'))
+        return contracts_for(t.get('mins_from_open', 0), t.get('session'))
     total_dol  = sum(t['net_pts'] * _contracts(t) * args.tick_value for t in trades)
     wr_pct     = len(wins) / max(1, len(nets)) * 100
 
@@ -1701,7 +1684,7 @@ def run_backtest():
             'trim2_hit', 'realized_rr', 'result', 'runner_peak_pts',
         ]
         def _csv_contracts(t):
-            return contracts_for(t.get('mins_from_open', 0), t.get('session'), t.get('level_name'))
+            return contracts_for(t.get('mins_from_open', 0), t.get('session'))
         for t in trades:
             rows.append({
                 'trade_n':      t['n'],

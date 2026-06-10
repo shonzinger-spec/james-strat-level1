@@ -27,7 +27,7 @@ EQH / EQL / OR5L / OB_HIGH / OB_LOW / PML / PDVPOC / 4H_LOW
 - No trade cap (`--max_per_day 99`), stop after 1st loss ends the day
 
 ### Loss Control
-- No intraday stop after loss (`--intraday_stop_after 99` — changed from 1)
+- 1 intraday loss -> end session (`--intraday_stop_after 1`)
 - 3 consecutive losses across days -> skip next day (`--max_consec_losses 3`)
 
 ### Bias
@@ -82,9 +82,7 @@ python3 james_strategy.py --file sample_data/NQ_1m_footprint.csv \
     --session_start_mins -120 --session_end_mins 210 \
     --afternoon_start_mins 270 --afternoon_end_mins 330 \
     --afternoon_contracts 6 --power_hour_contracts 10 \
-    --intraday_stop_after 99 \
-    --eqh_min_hour 8 \
-    --level_scale \
+    --intraday_stop_after 1 \
     --eqh_trim1=30 --eqh_trim2=55 \
     --ob_high_trim1=45 --ob_high_trim2=85 \
     --ob_low_trim1=45 --ob_low_trim2=85 \
