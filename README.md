@@ -45,9 +45,9 @@ skipped days use tighter rules:
 
 ### First-Signal Quality Gates
 
-Use these to make trade #1 of each day stricter without changing later trades:
+The first trade of each day is stricter by default:
 
-- `--first_signal_min_ratio 4.0`: require stronger POC imbalance for the first trade
+- `--first_signal_min_ratio 4.0`: enabled by default; require stronger POC imbalance for the first trade
 - `--first_signal_longs_only`: block first-trade shorts
 - `--first_signal_no_shorts_before 08:00`: block first-trade shorts before 8:00am ET
 
@@ -60,13 +60,11 @@ Default verified backtest (Nov 2025 – May 2026 on MNQ, 8/6 contract schedule):
 
 | Metric | Value |
 |--------|-------|
-| Trades | 540 |
-| Win Rate | 83.1% |
-| Profit Factor | 25.49 |
-| Total P&L | +$713,476 |
-| Per Month | +$118,679 |
-| Max Drawdown | $1,984 |
-| Skipped-day trades | 33 trades across 12 days, +$35,080 |
+| Trades | 529 |
+| Win Rate | 84.9% |
+| Profit Factor | 28.41 |
+| Total P&L | +$720,049 |
+| Max Drawdown | $1,843 |
 
 ### Legacy Pure-Skip Baseline
 
@@ -114,20 +112,21 @@ source pass and applying that report prints:
 The executable skipped-day mode above is still the honest command-line trading
 implementation.
 
-### Optional Conservative Variants
+### Previous Default Comparison
 
-First-trade POC ratio gate (`--first_signal_min_ratio 4.0`) on the baseline:
+To reproduce the previous skipped-day default without the first-trade ratio
+gate, add `--first_signal_min_ratio 0`:
 
 | Metric | Value |
 |--------|-------|
-| Trades | 500 |
-| Win Rate | 86.0% |
-| Profit Factor | 30.97 |
-| Total P&L | +$696,549 |
-| Max Drawdown | $1,552 |
+| Trades | 540 |
+| Win Rate | 83.1% |
+| Profit Factor | 25.49 |
+| Total P&L | +$713,476 |
+| Max Drawdown | $1,984 |
 
-This improves quality and drawdown but gives up some total P&L, so it is not
-the default.
+The first-trade ratio gate improved profit, win rate, profit factor, and
+drawdown on the verified data, so it is now the default.
 
 News slippage stress on skipped-day mode (`--news_slippage_multiplier 2`):
 
@@ -201,10 +200,10 @@ News slippage stress:
 --news_slippage_multiplier 2
 ```
 
-First-signal quality gate examples:
+First-signal quality gate overrides:
 
 ```bash
---first_signal_min_ratio 4.0
+--first_signal_min_ratio 0
 --first_signal_longs_only
 --first_signal_no_shorts_before 08:00
 ```

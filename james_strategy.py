@@ -93,6 +93,8 @@ parser.add_argument("--liquidity_only", action="store_true", default=False,
                     help="Only trade EQH/EQL/OR5H/OR5L (liquidity pools + opening range)")
 parser.add_argument("--eqh_eql_orl_only", action="store_true", default=False,
                     help="Only trade EQH/EQL/OR5L — production config (drops OR5H)")
+parser.add_argument("--allowed_levels", type=str, default="",
+                    help="Comma-separated level names to trade only those levels (e.g. OB_HIGH,OB_LOW,OR5L)")
 parser.add_argument("--start_date", type=str, default=None,
                     help="Only trade from this date inclusive (YYYY-MM-DD)")
 parser.add_argument("--end_date", type=str, default=None,
@@ -203,8 +205,8 @@ parser.add_argument("--long_bias",    action="store_true", default=False,
 parser.add_argument("--longs_only",   action="store_true", default=False,
                     help="Skip ALL short signals unconditionally")
 # ── First-signal quality gates ────────────────────────────────────────────────
-parser.add_argument("--first_signal_min_ratio", type=float, default=0.0,
-                    help="Require this POC ratio for the first trade of each day (0=off)")
+parser.add_argument("--first_signal_min_ratio", type=float, default=4.0,
+                    help="Require this POC ratio for the first trade of each day (0=off, default 4.0)")
 parser.add_argument("--first_signal_longs_only", action="store_true", default=False,
                     help="Only allow long entries for the first trade of each day")
 parser.add_argument("--first_signal_no_shorts_before", type=str, default=None,
@@ -395,6 +397,15 @@ def get_trim_pts(level_name, trim1_pts, trim2_pts):
     t1 = _TRIM1_OVERRIDES.get(level_name) or trim1_pts
     t2 = _TRIM2_OVERRIDES.get(level_name) or trim2_pts
     return t1, t2
+
+ALLOWED_LEVELS = {
+    level.strip().upper()
+    for level in args.allowed_levels.split(',')
+    if level.strip()
+}
+
+def level_is_allowed(level_name: str) -> bool:
+    return not ALLOWED_LEVELS or level_name.upper() in ALLOWED_LEVELS
 
 # ── News Blackout ─────────────────────────────────────────────────────────────
 # Nov 2025 – May 2026 high-impact macro dates (no trades allowed on these days)
@@ -751,6 +762,8 @@ def find_key_level_touch(bar, levels, tol, trend='neutral'):
     lo, hi, cl = bar['low'], bar['high'], bar['close']
     mins = int(bar.get('_mins_from_open', 0) or 0)
     for lvl, name in levels:
+        if not level_is_allowed(name):
+            continue
         if args.pdh_pdl_only and name not in ('PDH', 'PDL'):
             continue
         if args.eqh_eql_orl_only:
@@ -800,6 +813,8 @@ def find_break_bar(bar, levels, tol, trend='neutral', min_body_pct=0.60):
     mins = int(bar.get('_mins_from_open', 0) or 0)
 
     for lvl, name in levels:
+        if not level_is_allowed(name):
+            continue
         if args.pdh_pdl_only and name not in ('PDH', 'PDL'):
             continue
         if args.eqh_eql_orl_only:
@@ -1307,6 +1322,8 @@ def run_backtest():
           f" | POC position: {'on' if args.poc_position_gate else 'off'}"
           f" | Abs vol/delta: {args.min_bar_volume:g}/{args.min_bar_delta:g}"
           f" | Vol mode: {args.vol_mode_override or ('QQQ CSV' if args.qqq_vol_csv else 'NQ proxy (no override)')}")
+    if ALLOWED_LEVELS:
+        print(f"  Allowed levels: {', '.join(sorted(ALLOWED_LEVELS))}")
     if args.skipped_day_mode:
         print(f"  Skipped-day mode: on | no shorts before {args.skipped_day_no_shorts_before} ET"
               f" | skip first signal: {'on' if args.skipped_day_skip_first_signal else 'off'}"
