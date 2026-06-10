@@ -1,8 +1,13 @@
 # James Berry ICT/Orderflow Strategy — Backtest (Level 1 Data)
 
-A backtest-only implementation of James Berry's ICT/orderflow trading strategy.
+A backtest implementation of James Berry's ICT/orderflow trading strategy.
 Requires only **Level 1** tick data with aggressor flags (buy_vol / sell_vol) —
 no Level 2 market depth or order book data needed.
+
+The repo also includes a conservative TopstepX practice automation runner. See
+`TOPSTEPX_AUTOMATION.md`. The live runner uses a 1-minute OHLCV proxy because
+TopstepX bars do not expose the footprint POC fields used by the research
+backtest.
 
 ## Strategy
 
@@ -213,6 +218,46 @@ Walk-forward diagnostics:
 ```bash
 --walk_forward_report
 ```
+
+## TopstepX Practice Automation
+
+Create local config:
+
+```bash
+cp .env.example .env
+```
+
+Edit `.env` with your TopstepX username/API key. Keep `BOT_DRY_RUN=true` first.
+
+Probe the API connection and auto-detected practice contract:
+
+```bash
+python3 live_topstepx.py --probe
+```
+
+Run one dry poll:
+
+```bash
+python3 live_topstepx.py --once
+```
+
+Run continuously in dry-run mode:
+
+```bash
+python3 live_topstepx.py
+```
+
+After dry-run output is correct, practice execution requires both:
+
+```bash
+BOT_DRY_RUN=false
+python3 live_topstepx.py --execute
+```
+
+The practice runner submits one market entry with native TopstepX brackets:
+`BOT_STOP_POINTS` for stop loss and `BOT_TAKE_PROFIT_POINTS` for take profit.
+It starts with `MNQ`, `1` contract, max `3` trades/day, and refuses a new entry
+when an open position already exists.
 
 ## Further Improvement Ideas
 
