@@ -109,14 +109,14 @@ parser.add_argument("--require_correlation", action="store_true", default=False,
                     help="Only enter when NVDA and SPY prior-day direction aligns with signal")
 parser.add_argument("--skip_high_vol", action=argparse.BooleanOptionalAction, default=True,
                     help="Skip days where prior session range > 2x 20-day average (default True)")
-parser.add_argument("--skipped_day_mode", action="store_true", default=False,
-                    help="Trade formerly skipped news/high-vol/cooldown days with stricter entry rules")
+parser.add_argument("--skipped_day_mode", action=argparse.BooleanOptionalAction, default=True,
+                    help="Trade formerly skipped news/high-vol/cooldown days with stricter entry rules (default True)")
 parser.add_argument("--skipped_day_no_shorts_before", type=str, default="08:00",
                     help="In skipped-day mode, block short entries before this ET time (HH:MM, default 08:00)")
 parser.add_argument("--skipped_day_skip_first_signal", action=argparse.BooleanOptionalAction, default=True,
                     help="In skipped-day mode, ignore the first qualifying signal of the day (default True)")
-parser.add_argument("--skipped_day_longs_only", action="store_true", default=False,
-                    help="In skipped-day mode, skip all short entries while leaving normal days unchanged")
+parser.add_argument("--skipped_day_longs_only", action=argparse.BooleanOptionalAction, default=True,
+                    help="In skipped-day mode, skip all short entries while leaving normal days unchanged (default True)")
 parser.add_argument("--skipped_day_size_multiplier", type=float, default=1.0,
                     help="Position-size multiplier for skipped-day-mode trades (default 1.0)")
 parser.add_argument("--news_slippage_multiplier", type=float, default=1.0,

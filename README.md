@@ -30,14 +30,15 @@ EQH / EQL / OR5L / OB_HIGH / OB_LOW / PML / PDVPOC / 4H_LOW
 - 1 intraday loss -> end session (`--intraday_stop_after 1`)
 - 3 consecutive losses across days -> skip next day (`--max_consec_losses 3`)
 
-### Optional Skipped-Day Mode
-The baseline skips high-impact news days, high prior-range days, and cross-day
-loss-control cooldown days. `--skipped_day_mode` reopens those formerly skipped
-days, but lets you apply tighter rules only on those days:
+### Default Skipped-Day Mode
+By default, the bot trades high-impact news days, high prior-range days, and
+cross-day loss-control cooldown days instead of skipping them. Those formerly
+skipped days use tighter rules:
 
-- `--skipped_day_skip_first_signal`: ignore the first qualifying skipped-day signal
-- `--skipped_day_longs_only`: only take long setups on skipped days
-- `--skipped_day_no_shorts_before 08:00`: block early skipped-day shorts
+- `--skipped_day_mode`: enabled by default; use `--no-skipped_day_mode` for the old pure-skip baseline
+- `--skipped_day_skip_first_signal`: enabled by default; ignore the first qualifying skipped-day signal
+- `--skipped_day_longs_only`: enabled by default; only take long setups on skipped days
+- `--skipped_day_no_shorts_before 08:00`: block early skipped-day shorts by default
 - `--skipped_day_size_multiplier 0.5`: half-size skipped-day trades for more drawdown cushion
 - `--news_slippage_multiplier 2`: stress-test news-day trades with heavier slippage
 - `--research_target_report`: print the `$716k` post-filter research target
@@ -55,21 +56,7 @@ Long bias by default (only shorts when trend is clearly down via `--long_bias`)
 
 ## Performance
 
-Verified backtests (Nov 2025 – May 2026 on MNQ, 8/6 contract schedule):
-
-| Metric | Value |
-|--------|-------|
-| Trades | 516 |
-| Win Rate | 84.3% |
-| Profit Factor | 26.92 |
-| Total P&L | +$682,442 |
-| Per Month | +$113,517 |
-| Max Drawdown | $1,736 |
-
-### Skipped-Day Mode
-
-Executable skipped-day mode:
-`--skipped_day_mode --skipped_day_longs_only --skipped_day_skip_first_signal`
+Default verified backtest (Nov 2025 – May 2026 on MNQ, 8/6 contract schedule):
 
 | Metric | Value |
 |--------|-------|
@@ -80,6 +67,20 @@ Executable skipped-day mode:
 | Per Month | +$118,679 |
 | Max Drawdown | $1,984 |
 | Skipped-day trades | 33 trades across 12 days, +$35,080 |
+
+### Legacy Pure-Skip Baseline
+
+To reproduce the old baseline that truly skips news/high-vol/cooldown days, add
+`--no-skipped_day_mode`:
+
+| Metric | Value |
+|--------|-------|
+| Trades | 516 |
+| Win Rate | 84.3% |
+| Profit Factor | 26.92 |
+| Total P&L | +$682,442 |
+| Per Month | +$113,517 |
+| Max Drawdown | $1,736 |
 
 Half-size skipped-day mode (`--skipped_day_size_multiplier 0.5`):
 
@@ -161,7 +162,7 @@ No Level 2 data required.
 # Install dependencies
 pip install -r requirements.txt
 
-# Run backtest
+# Run default improved skipped-day backtest
 python3 james_strategy.py --file sample_data/NQ_1m_footprint.csv \
     --contracts 8 \
     --level_tol 20 --min_ratio 3.0 --eqh_eql_orl_only \
@@ -180,28 +181,7 @@ python3 james_strategy.py --file sample_data/NQ_1m_footprint.csv \
     --four_hr_low_trim1=45 --four_hr_low_trim2=85
 ```
 
-Skipped-day mode:
-
-```bash
-python3 james_strategy.py --file sample_data/NQ_1m_footprint.csv \
-    --contracts 8 \
-    --level_tol 20 --min_ratio 3.0 --eqh_eql_orl_only \
-    --trend_lookback 2 --skip_news --skip_high_vol \
-    --skipped_day_mode --skipped_day_longs_only \
-    --skipped_day_no_shorts_before 08:00 --skipped_day_skip_first_signal \
-    --max_consec_losses 3 --or5l_trail --or5l_trail_after 100 \
-    --or5l_trail_stop 15 --long_bias --poc_position_gate \
-    --pdvpoc --pdh_pdl --premarket_levels --four_hr_levels \
-    --session_start_mins -120 --session_end_mins 210 \
-    --afternoon_start_mins 270 --afternoon_end_mins 330 \
-    --afternoon_contracts 6 --power_hour_contracts 10 \
-    --intraday_stop_after 1 \
-    --eqh_trim1=30 --eqh_trim2=55 \
-    --ob_high_trim1=45 --ob_high_trim2=85 \
-    --ob_low_trim1=45 --ob_low_trim2=85 \
-    --pml_trim1=35 --pml_trim2=60 \
-    --four_hr_low_trim1=45 --four_hr_low_trim2=85
-```
+To run the old pure-skip baseline, add `--no-skipped_day_mode`.
 
 For the lower-drawdown variant, add:
 
