@@ -124,6 +124,8 @@ parser.add_argument("--skip_two_stop_day", action="store_true", default=False,
                     help="If both daily trades stop out, skip the next trading day")
 parser.add_argument("--max_weekly_loss_pts", type=float, default=0.0,
                     help="Stop trading for the rest of the week once down this many pts (0=off)")
+parser.add_argument("--skip_first_signal", action="store_true", default=False,
+                    help="Skip the first qualifying signal each day. Trade #2+ only.")
 # ── OR5L Trailing Stop ────────────────────────────────────────────────────────
 parser.add_argument("--or5l_trail",       action="store_true", default=False,
                     help="Runner uses trailing stop instead of fixed target (all trade types)")
@@ -1391,6 +1393,10 @@ def run_backtest():
                         continue
                     if args.long_bias and dirn == 'short' and trend != 'short':
                         continue
+                    # Skip first signal of the day
+                    if args.skip_first_signal and trades_today == 0:
+                        continue
+
                     # Retest confirmed — enter
                     entry_px = float(bar['close'])
                     lname    = bst['level_name']
@@ -1520,6 +1526,10 @@ def run_backtest():
                 valid = (judas_up and direction == 'short') or (judas_down and direction == 'long')
                 if not valid:
                     continue
+
+            # Skip first signal of the day
+            if args.skip_first_signal and trades_today == 0:
+                continue
 
             # Entry at close of confirming bar
             entry_px = bar['close']
