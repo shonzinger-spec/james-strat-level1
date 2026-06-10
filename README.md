@@ -39,6 +39,16 @@ days, but lets you apply tighter rules only on those days:
 - `--skipped_day_longs_only`: only take long setups on skipped days
 - `--skipped_day_no_shorts_before 08:00`: block early skipped-day shorts
 - `--skipped_day_size_multiplier 0.5`: half-size skipped-day trades for more drawdown cushion
+- `--news_slippage_multiplier 2`: stress-test news-day trades with heavier slippage
+- `--research_target_report`: print the `$716k` post-filter research target
+
+### First-Signal Quality Gates
+
+Use these to make trade #1 of each day stricter without changing later trades:
+
+- `--first_signal_min_ratio 4.0`: require stronger POC imbalance for the first trade
+- `--first_signal_longs_only`: block first-trade shorts
+- `--first_signal_no_shorts_before 08:00`: block first-trade shorts before 8:00am ET
 
 ### Bias
 Long bias by default (only shorts when trend is clearly down via `--long_bias`)
@@ -87,9 +97,46 @@ post-hoc research filter on an already-generated trade log:
 - remove skipped-day shorts before 8:00am ET
 - remove skipped-day first trades
 
-That result is useful as a research target, but it is not represented as a
-direct one-pass engine result in this Level 1 repo. The reproducible engine
-mode above is the honest command-line implementation.
+That exact legacy number remains a historical post-hoc trade-log result. The
+repo now includes `--research_target_report` so the same idea can be measured
+against a fresh engine pass. On the current engine, running an all-skipped-days
+source pass and applying that report prints:
+
+| Metric | Value |
+|--------|-------|
+| Trades | 549 |
+| Win Rate | 84.0% |
+| Profit Factor | 27.29 |
+| Total P&L | +$730,235 |
+| Max Drawdown | $1,736 |
+
+The executable skipped-day mode above is still the honest command-line trading
+implementation.
+
+### Optional Conservative Variants
+
+First-trade POC ratio gate (`--first_signal_min_ratio 4.0`) on the baseline:
+
+| Metric | Value |
+|--------|-------|
+| Trades | 500 |
+| Win Rate | 86.0% |
+| Profit Factor | 30.97 |
+| Total P&L | +$696,549 |
+| Max Drawdown | $1,552 |
+
+This improves quality and drawdown but gives up some total P&L, so it is not
+the default.
+
+News slippage stress on skipped-day mode (`--news_slippage_multiplier 2`):
+
+| Metric | Value |
+|--------|-------|
+| Trades | 540 |
+| Win Rate | 83.1% |
+| Profit Factor | 25.41 |
+| Total P&L | +$713,164 |
+| Max Drawdown | $1,984 |
 
 ## Data Format
 
@@ -162,19 +209,42 @@ For the lower-drawdown variant, add:
 --skipped_day_size_multiplier 0.5
 ```
 
+Research-target report:
+
+```bash
+--research_target_report
+```
+
+News slippage stress:
+
+```bash
+--news_slippage_multiplier 2
+```
+
+First-signal quality gate examples:
+
+```bash
+--first_signal_min_ratio 4.0
+--first_signal_longs_only
+--first_signal_no_shorts_before 08:00
+```
+
+Walk-forward diagnostics:
+
+```bash
+--walk_forward_report
+```
+
 ## Further Improvement Ideas
 
-- **Engine-native research target:** add a two-pass mode that first marks the
-  exact baseline-skipped dates, then applies the post-hoc `$716k` filter as a
-  true one-pass/replayable engine rule.
-- **News slippage stress:** rerun news-day trades with heavier slippage before
-  trusting them live.
-- **Day-state sizing:** reduce size after a first loss or when trading a
-  formerly skipped day, instead of fully skipping the day.
-- **First-signal quality gate:** model why trade #1 is weak and require a
-  stronger confirmation before allowing it.
-- **Walk-forward validation:** split the Nov-May data into rolling train/test
-  windows before treating any new filter as production-grade.
+- **Engine-native research target:** convert the post-filter target into a full
+  two-pass execution mode if the diagnostic remains stable.
+- **Level-specific first-trade rules:** test whether early shorts are weak only
+  on specific level families instead of blocking them globally.
+- **Live-feasible filter comparison:** compare POC ratio, session, volatility,
+  and direction gates against Level 1-only data available in real time.
+- **Out-of-sample expansion:** rerun the same commands on additional NQ months
+  before treating any new filter as production-grade.
 
 ## Structure
 

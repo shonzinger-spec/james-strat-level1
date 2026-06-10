@@ -119,6 +119,8 @@ parser.add_argument("--skipped_day_longs_only", action="store_true", default=Fal
                     help="In skipped-day mode, skip all short entries while leaving normal days unchanged")
 parser.add_argument("--skipped_day_size_multiplier", type=float, default=1.0,
                     help="Position-size multiplier for skipped-day-mode trades (default 1.0)")
+parser.add_argument("--news_slippage_multiplier", type=float, default=1.0,
+                    help="Multiply slippage cost for trades on news-blackout days (default 1.0)")
 parser.add_argument("--fomc_buffer_before", type=int, default=0,
                     help="Extra trading days to black out BEFORE each FOMC date (default 0)")
 parser.add_argument("--fomc_buffer_after",  type=int, default=0,
@@ -200,6 +202,17 @@ parser.add_argument("--long_bias",    action="store_true", default=False,
                     help="Skip short signals when trend is 'neutral' or 'long' (only short when trend=short)")
 parser.add_argument("--longs_only",   action="store_true", default=False,
                     help="Skip ALL short signals unconditionally")
+# ── First-signal quality gates ────────────────────────────────────────────────
+parser.add_argument("--first_signal_min_ratio", type=float, default=0.0,
+                    help="Require this POC ratio for the first trade of each day (0=off)")
+parser.add_argument("--first_signal_longs_only", action="store_true", default=False,
+                    help="Only allow long entries for the first trade of each day")
+parser.add_argument("--first_signal_no_shorts_before", type=str, default=None,
+                    help="Block first-trade short entries before this ET time (HH:MM)")
+parser.add_argument("--research_target_report", action="store_true", default=False,
+                    help="Print post-filter metrics for the skipped-day research target")
+parser.add_argument("--walk_forward_report", action="store_true", default=False,
+                    help="Print monthly walk-forward-style train/test diagnostics")
 # ── Early timeout exit ────────────────────────────────────────────────────────
 parser.add_argument("--min_timeout_pts", type=float, default=0.0,
                     help="At halfway through max_hold window, exit if unrealized < this threshold (0=off)")
@@ -221,6 +234,11 @@ def _parse_hhmm_to_mins_from_open(value: str) -> int:
     return (hour - 9) * 60 + minute - 30
 
 SKIPPED_DAY_NO_SHORTS_BEFORE_MINS = _parse_hhmm_to_mins_from_open(args.skipped_day_no_shorts_before)
+RESEARCH_TARGET_NO_SHORTS_BEFORE_MINS = _parse_hhmm_to_mins_from_open("08:00")
+FIRST_SIGNAL_NO_SHORTS_BEFORE_MINS = (
+    _parse_hhmm_to_mins_from_open(args.first_signal_no_shorts_before)
+    if args.first_signal_no_shorts_before else None
+)
 
 def contracts_for(mins_from_open=0, session_tag=None):
     """Return contract count for a trade based on time window and session."""
@@ -236,6 +254,105 @@ def size_multiplier_for_trade(t: dict) -> float:
 def dollars_for_trade(t: dict) -> float:
     contracts = contracts_for(t.get('mins_from_open', 0), t.get('session'))
     return t['net_pts'] * contracts * args.tick_value * size_multiplier_for_trade(t)
+
+def adjusted_trade_result(result: dict, skipped_day_reasons: list[str]) -> dict:
+    """Apply post-simulation cost stress that depends on day type."""
+    result = dict(result)
+    if 'news' in skipped_day_reasons and args.news_slippage_multiplier > 1.0:
+        extra_cost = args.slippage * (args.news_slippage_multiplier - 1.0)
+        result['net_pts'] = round(result['net_pts'] - extra_cost, 2)
+        result['realized_rr'] = round(result['net_pts'] / args.stop_pts, 2)
+    return result
+
+def summarize_trades(trades: list[dict]) -> dict:
+    if not trades:
+        return {
+            'trades': 0, 'win_rate': 0.0, 'profit_factor': 0.0,
+            'total_dollars': 0.0, 'max_drawdown': 0.0, 'days': 0,
+        }
+    pnl = [dollars_for_trade(t) for t in trades]
+    wins = [t for t in trades if t['net_pts'] > 0]
+    gross_win = sum(t['net_pts'] for t in trades if t['net_pts'] > 0)
+    gross_loss = abs(sum(t['net_pts'] for t in trades if t['net_pts'] <= 0))
+    equity = 0.0
+    peak = 0.0
+    max_dd = 0.0
+    for dollars in pnl:
+        equity += dollars
+        peak = max(peak, equity)
+        max_dd = max(max_dd, peak - equity)
+    return {
+        'trades': len(trades),
+        'days': len({t['date'] for t in trades}),
+        'win_rate': len(wins) / max(1, len(trades)) * 100,
+        'profit_factor': gross_win / gross_loss if gross_loss else float('inf'),
+        'total_dollars': sum(pnl),
+        'max_drawdown': max_dd,
+    }
+
+def print_summary_line(label: str, summary: dict) -> None:
+    pf = summary['profit_factor']
+    pf_label = f"{pf:.2f}" if pf != float('inf') else "inf"
+    print(
+        f"  {label:<28} "
+        f"trades={summary['trades']:>4} days={summary['days']:>3} "
+        f"WR={summary['win_rate']:>5.1f}% PF={pf_label:>6} "
+        f"P&L=${summary['total_dollars']:>10,.0f} "
+        f"MaxDD=${summary['max_drawdown']:>7,.0f}"
+    )
+
+def research_target_trades(trades: list[dict]) -> list[dict]:
+    """Post-filter target: no skipped-day trade #1 and no skipped-day shorts before 8am."""
+    target = []
+    for t in trades:
+        if not t.get('skipped_day'):
+            target.append(t)
+            continue
+        if int(t.get('trade_number', 0) or 0) <= 1:
+            continue
+        if t.get('direction') == 'short' and int(t.get('mins_from_open', 0) or 0) < RESEARCH_TARGET_NO_SHORTS_BEFORE_MINS:
+            continue
+        target.append(t)
+    return target
+
+def print_walk_forward_report(trades: list[dict]) -> None:
+    if not trades:
+        return
+    by_month: dict[str, list[dict]] = {}
+    for trade in trades:
+        month = str(trade['date'])[:7]
+        by_month.setdefault(month, []).append(trade)
+    months = sorted(by_month)
+    if len(months) < 2:
+        return
+    print("\n  Monthly walk-forward diagnostics:")
+    for i in range(1, len(months)):
+        train_months = months[:i]
+        test_month = months[i]
+        train = [t for m in train_months for t in by_month[m]]
+        test = by_month[test_month]
+        train_s = summarize_trades(train)
+        test_s = summarize_trades(test)
+        print_summary_line(f"train->{test_month}", train_s)
+        print_summary_line(f"test {test_month}", test_s)
+
+def first_signal_gate(direction: str, ratio: float, bar_mins: int, trades_today: int) -> bool:
+    if trades_today > 0:
+        return True
+    if args.first_signal_longs_only and direction == 'short':
+        return False
+    if (
+        FIRST_SIGNAL_NO_SHORTS_BEFORE_MINS is not None
+        and direction == 'short'
+        and bar_mins < FIRST_SIGNAL_NO_SHORTS_BEFORE_MINS
+    ):
+        return False
+    if args.first_signal_min_ratio > 0 and ratio < args.first_signal_min_ratio:
+        return False
+    return True
+
+def trade_size_multiplier(skipped_day_active: bool) -> float:
+    return args.skipped_day_size_multiplier if skipped_day_active else 1.0
 
 # ── Per-level ratio lookup ────────────────────────────────────────────────────
 # Each level type gets its own minimum POC ratio. Falls back to args.min_ratio
@@ -1465,7 +1582,13 @@ def run_backtest():
                             del pending_breaks[bkey]
                             continue
                         skipped_day_qualified_signals += 1
-                    result   = sim_trade(df, idx, dirn, entry_px, vol_mode=vol_mode, level_name=lname)
+                    if not first_signal_gate(dirn, ratio, bar_mins, trades_today):
+                        del pending_breaks[bkey]
+                        continue
+                    result   = adjusted_trade_result(
+                        sim_trade(df, idx, dirn, entry_px, vol_mode=vol_mode, level_name=lname),
+                        skipped_day_reasons,
+                    )
                     dt_str   = str(bar['_est'])[:16]
                     trade = {
                         'n':          len(trades) + 1,
@@ -1481,7 +1604,7 @@ def run_backtest():
                         'session':    'pm' if args.afternoon_start_mins > 0 and bar['_mins_from_open'] >= args.afternoon_start_mins else 'am',
                         'skipped_day': skipped_day_active,
                         'skipped_day_reasons': '+'.join(skipped_day_reasons),
-                        'size_multiplier': args.skipped_day_size_multiplier if skipped_day_active else 1.0,
+                        'size_multiplier': trade_size_multiplier(skipped_day_active),
                         **result,
                     }
                     trades.append(trade)
@@ -1605,7 +1728,12 @@ def run_backtest():
                     skipped_day_qualified_signals += 1
                     continue
                 skipped_day_qualified_signals += 1
-            result = sim_trade(df, idx, direction, entry_px, vol_mode=vol_mode, level_name=level_name)
+            if not first_signal_gate(direction, ratio, bar_mins, trades_today):
+                continue
+            result = adjusted_trade_result(
+                sim_trade(df, idx, direction, entry_px, vol_mode=vol_mode, level_name=level_name),
+                skipped_day_reasons,
+            )
 
             dt_str = str(bar['_est'])[:16]
             trade = {
@@ -1623,7 +1751,7 @@ def run_backtest():
                 'session':     'pm' if args.afternoon_start_mins > 0 and bar['_mins_from_open'] >= args.afternoon_start_mins else 'am',
                 'skipped_day': skipped_day_active,
                 'skipped_day_reasons': '+'.join(skipped_day_reasons),
-                'size_multiplier': args.skipped_day_size_multiplier if skipped_day_active else 1.0,
+                'size_multiplier': trade_size_multiplier(skipped_day_active),
                 **result,
             }
             trades.append(trade)
@@ -1740,6 +1868,11 @@ def run_backtest():
     if args.skipped_day_mode and any(skipped_day_counts.values()):
         parts = [f"{k}:{v}" for k, v in skipped_day_counts.items() if v]
         print(f"  Skipped-day mode days: {', '.join(parts)}")
+    if args.research_target_report:
+        print(f"\n  Research target post-filter:")
+        print_summary_line("no first skipped / no pre-8 shorts", summarize_trades(research_target_trades(trades)))
+    if args.walk_forward_report:
+        print_walk_forward_report(trades)
     if args.require_correlation and not corr_data:
         print(f"\n  Note: Nvidia/SPY filter NOT applied (no data).")
         print(f"  Live trading would add that filter — expect fewer but better trades.")
