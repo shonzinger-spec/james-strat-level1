@@ -30,7 +30,7 @@ from data_feeds.order_blocks import compute_order_blocks
 logging.getLogger().setLevel(logging.ERROR)
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--file",         default="data/processed/NQ_5m_cvd.csv")
+parser.add_argument("--file",         default="sample_data/NQ_1m_footprint.csv")
 parser.add_argument("--stop_pts",     type=float, default=23.0,  help="Stop distance in NQ points")
 parser.add_argument("--trim1_pts",    type=float, default=40.0,  help="First trim target")
 parser.add_argument("--trim2_pts",    type=float, default=70.0,  help="Second trim target")
@@ -39,16 +39,16 @@ parser.add_argument("--runner_pts",   type=float, default=175.0, help="Runner ta
 parser.add_argument("--trim1_pct",    type=float, default=0.33,  help="Fraction to exit at trim1")
 parser.add_argument("--trim2_pct",    type=float, default=0.33,  help="Fraction to exit at trim2")
 # ── Per-level trim distance overrides (override global --trim1_pts/--trim2_pts) ─
-parser.add_argument("--eqh_trim1",     type=float, default=None, help="T1 override for EQH")
-parser.add_argument("--eqh_trim2",     type=float, default=None, help="T2 override for EQH")
-parser.add_argument("--ob_high_trim1", type=float, default=None, help="T1 override for OB_HIGH")
-parser.add_argument("--ob_high_trim2", type=float, default=None, help="T2 override for OB_HIGH")
-parser.add_argument("--ob_low_trim1",  type=float, default=None, help="T1 override for OB_LOW")
-parser.add_argument("--ob_low_trim2",  type=float, default=None, help="T2 override for OB_LOW")
-parser.add_argument("--pml_trim1",     type=float, default=None, help="T1 override for PML")
-parser.add_argument("--pml_trim2",     type=float, default=None, help="T2 override for PML")
-parser.add_argument("--four_hr_low_trim1", type=float, default=None, help="T1 override for 4H_LOW")
-parser.add_argument("--four_hr_low_trim2", type=float, default=None, help="T2 override for 4H_LOW")
+parser.add_argument("--eqh_trim1",     type=float, default=30.0, help="T1 override for EQH")
+parser.add_argument("--eqh_trim2",     type=float, default=55.0, help="T2 override for EQH")
+parser.add_argument("--ob_high_trim1", type=float, default=45.0, help="T1 override for OB_HIGH")
+parser.add_argument("--ob_high_trim2", type=float, default=85.0, help="T2 override for OB_HIGH")
+parser.add_argument("--ob_low_trim1",  type=float, default=45.0, help="T1 override for OB_LOW")
+parser.add_argument("--ob_low_trim2",  type=float, default=85.0, help="T2 override for OB_LOW")
+parser.add_argument("--pml_trim1",     type=float, default=35.0, help="T1 override for PML")
+parser.add_argument("--pml_trim2",     type=float, default=60.0, help="T2 override for PML")
+parser.add_argument("--four_hr_low_trim1", type=float, default=45.0, help="T1 override for 4H_LOW")
+parser.add_argument("--four_hr_low_trim2", type=float, default=85.0, help="T2 override for 4H_LOW")
 parser.add_argument("--max_per_day", "--max_trades_day", dest="max_per_day", type=int, default=99)
 parser.add_argument("--level_tol",    type=float, default=20.0,  help="Pts from key level to count as 'touch'")
 parser.add_argument("--dynamic_tol", action="store_true", default=False,
@@ -78,7 +78,7 @@ parser.add_argument("--session_end_mins", type=int, default=210,
 parser.add_argument("--afternoon_start_mins", type=int, default=270,
                     help="Afternoon session start in mins after 9:30 (default 270 = 2pm, set 0 to disable)")
 parser.add_argument("--afternoon_end_mins", type=int, default=390,
-                    help="Afternoon session end in mins after 9:30 (default 330 = 3pm)")
+                    help="Afternoon session end in mins after 9:30 (default 390 = 4pm)")
 parser.add_argument("--afternoon_contracts", type=int, default=6,
                     help="Contract count for afternoon session (default 6)")
 parser.add_argument("--power_hour_contracts", type=int, default=10,
@@ -91,7 +91,7 @@ parser.add_argument("--pdh_pdl_only", action="store_true", default=False,
                     help="Only trade PDH/PDL — skip PM-H/PM-L and round numbers")
 parser.add_argument("--liquidity_only", action="store_true", default=False,
                     help="Only trade EQH/EQL/OR5H/OR5L (liquidity pools + opening range)")
-parser.add_argument("--eqh_eql_orl_only", action="store_true", default=False,
+parser.add_argument("--eqh_eql_orl_only", action="store_true", default=True,
                     help="Only trade EQH/EQL/OR5L — production config (drops OR5H)")
 parser.add_argument("--allowed_levels", type=str, default="",
                     help="Comma-separated level names to trade only those levels (e.g. OB_HIGH,OB_LOW,OR5L)")
@@ -112,26 +112,26 @@ parser.add_argument("--require_correlation", action="store_true", default=False,
 parser.add_argument("--skip_high_vol", action=argparse.BooleanOptionalAction, default=True,
                     help="Skip days where prior session range > 2x 20-day average (default True)")
 parser.add_argument("--skipped_day_mode", action=argparse.BooleanOptionalAction, default=True,
-                    help="Trade formerly skipped news/high-vol/cooldown days with stricter entry rules (default True)")
+                    help="High-risk discretion mode: trade news/high-vol/cooldown days with stricter entry rules (default True)")
 parser.add_argument("--skipped_day_no_shorts_before", type=str, default="08:00",
-                    help="In skipped-day mode, block short entries before this ET time (HH:MM, default 08:00)")
+                    help="In high-risk discretion mode, block short entries before this ET time (HH:MM, default 08:00)")
 parser.add_argument("--skipped_day_skip_first_signal", action=argparse.BooleanOptionalAction, default=True,
-                    help="In skipped-day mode, ignore the first qualifying signal of the day (default True)")
+                    help="In high-risk discretion mode, ignore the first qualifying signal of the day (default True)")
 parser.add_argument("--skipped_day_longs_only", action=argparse.BooleanOptionalAction, default=True,
-                    help="In skipped-day mode, skip all short entries while leaving normal days unchanged (default True)")
+                    help="In high-risk discretion mode, skip all short entries while leaving normal days unchanged (default True)")
 parser.add_argument("--skipped_day_size_multiplier", type=float, default=1.0,
-                    help="Position-size multiplier for skipped-day-mode trades (default 1.0)")
+                    help="Position-size multiplier for high-risk discretion trades (default 1.0)")
 parser.add_argument("--news_slippage_multiplier", type=float, default=1.0,
                     help="Multiply slippage cost for trades on news-blackout days (default 1.0)")
 parser.add_argument("--fomc_buffer_before", type=int, default=0,
                     help="Extra trading days to black out BEFORE each FOMC date (default 0)")
 parser.add_argument("--fomc_buffer_after",  type=int, default=0,
                     help="Extra trading days to black out AFTER each FOMC date (default 0)")
-parser.add_argument("--contracts",  type=int,   default=5,   help="Number of contracts (default 5 MNQ)")
+parser.add_argument("--contracts",  type=int,   default=8,   help="Number of contracts (default 8 MNQ)")
 parser.add_argument("--tick_value", type=float, default=2.0, help="$ per point per contract (default $2 MNQ)")
 # ── Loss-control rules ────────────────────────────────────────────────────────
-parser.add_argument("--max_consec_losses", type=int, default=0,
-                    help="Skip next trading day after N consecutive losses (0=off)")
+parser.add_argument("--max_consec_losses", type=int, default=4,
+                    help="Skip the next qualified trade after N consecutive losses (0=off, default 4)")
 parser.add_argument("--intraday_stop_after", type=int, default=1,
                     help="Stop trading for the rest of the session after N consecutive losses within a day (default 1)")
 parser.add_argument("--skip_two_stop_day", action="store_true", default=False,
@@ -139,7 +139,7 @@ parser.add_argument("--skip_two_stop_day", action="store_true", default=False,
 parser.add_argument("--max_weekly_loss_pts", type=float, default=0.0,
                     help="Stop trading for the rest of the week once down this many pts (0=off)")
 # ── OR5L Trailing Stop ────────────────────────────────────────────────────────
-parser.add_argument("--or5l_trail",       action="store_true", default=False,
+parser.add_argument("--or5l_trail",       action="store_true", default=True,
                     help="Runner uses trailing stop instead of fixed target (all trade types)")
 parser.add_argument("--or5l_trail_after", type=float, default=100.0,
                     help="Activate trail once runner unrealized profit hits this many pts (default 100)")
@@ -200,7 +200,7 @@ parser.add_argument("--retest_tol",        type=float, default=10.0,
 parser.add_argument("--csv_out",           type=str,   default=None,
                     help="If set, save full trade log to this CSV path")
 # ── Direction bias ────────────────────────────────────────────────────────────
-parser.add_argument("--long_bias",    action="store_true", default=False,
+parser.add_argument("--long_bias",    action="store_true", default=True,
                     help="Skip short signals when trend is 'neutral' or 'long' (only short when trend=short)")
 parser.add_argument("--longs_only",   action="store_true", default=False,
                     help="Skip ALL short signals unconditionally")
@@ -304,7 +304,7 @@ def print_summary_line(label: str, summary: dict) -> None:
     )
 
 def research_target_trades(trades: list[dict]) -> list[dict]:
-    """Post-filter target: no skipped-day trade #1 and no skipped-day shorts before 8am."""
+    """Post-filter target: no high-risk-day trade #1 and no high-risk-day shorts before 8am."""
     target = []
     for t in trades:
         if not t.get('skipped_day'):
@@ -1190,7 +1190,6 @@ def sim_trade(df, entry_bar_idx, direction, entry_px, vol_mode='NORMAL', level_n
         result['runner_peak_pts'] = round(peak_profit, 2)
     return result
 
-
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def run_backtest():
@@ -1325,7 +1324,7 @@ def run_backtest():
     if ALLOWED_LEVELS:
         print(f"  Allowed levels: {', '.join(sorted(ALLOWED_LEVELS))}")
     if args.skipped_day_mode:
-        print(f"  Skipped-day mode: on | no shorts before {args.skipped_day_no_shorts_before} ET"
+        print(f"  High-risk discretion mode: on | no shorts before {args.skipped_day_no_shorts_before} ET"
               f" | skip first signal: {'on' if args.skipped_day_skip_first_signal else 'off'}"
               f" | longs only: {'on' if args.skipped_day_longs_only else 'off'}"
               f" | size multiplier: {args.skipped_day_size_multiplier:g}")
@@ -1357,10 +1356,10 @@ def run_backtest():
 
     # ── Loss-control state ────────────────────────────────────────────────────
     consec_losses_count = 0          # running consecutive loss counter
+    skip_next_trade     = False      # set True to skip the next qualified setup
     skip_next_day       = False      # set True to sit out the next trading day
     week_pts            = 0.0        # running P&L for current ISO week
     week_key            = None       # (year, week_number) of current day
-
     for day_idx, date in enumerate(sorted(levels_by_day.keys())):
         levels = [
             lvl for lvl in levels_by_day[date]
@@ -1475,7 +1474,7 @@ def run_backtest():
         if skipped_day_active:
             for reason in skipped_day_reasons:
                 skipped_day_counts[reason] = skipped_day_counts.get(reason, 0) + 1
-            print(f"  {date}  SKIPPED-DAY MODE ({'+'.join(skipped_day_reasons)})")
+            print(f"  {date}  HIGH-RISK DISCRETION ({'+'.join(skipped_day_reasons)})")
 
         # All session bars from exact open (for Judas swing tracking + VWAP)
         open_mask = (df['_date'] == date) & (df['_mins_from_open'] >= 0)
@@ -1602,6 +1601,14 @@ def run_backtest():
                     if not first_signal_gate(dirn, ratio, bar_mins, trades_today):
                         del pending_breaks[bkey]
                         continue
+                    if skip_next_trade:
+                        skip_next_trade = False
+                        consec_losses_count = 0
+                        print(f"  {date}  {dirn:<5}  {lname:<10}  ratio={ratio:.1f}:1  "
+                              f"[RETEST/{vol_mode}]  SKIPPED ({args.max_consec_losses}-loss brake)")
+                        trades_today = args.max_per_day
+                        del pending_breaks[bkey]
+                        continue
                     result   = adjusted_trade_result(
                         sim_trade(df, idx, dirn, entry_px, vol_mode=vol_mode, level_name=lname),
                         skipped_day_reasons,
@@ -1637,7 +1644,7 @@ def run_backtest():
                         level_type_losses[lname] = level_type_losses.get(lname, 0) + 1
                         consec_losses_count += 1
                         if args.max_consec_losses > 0 and consec_losses_count >= args.max_consec_losses:
-                            skip_next_day = True
+                            skip_next_trade = True
                         day_consec_losses += 1
                         if args.intraday_stop_after > 0 and day_consec_losses >= args.intraday_stop_after:
                             trades_today = args.max_per_day
@@ -1747,6 +1754,13 @@ def run_backtest():
                 skipped_day_qualified_signals += 1
             if not first_signal_gate(direction, ratio, bar_mins, trades_today):
                 continue
+            if skip_next_trade:
+                skip_next_trade = False
+                consec_losses_count = 0
+                print(f"  {date}  {direction:<5}  {level_name:<10}  ratio={ratio:.1f}:1  "
+                      f"SKIPPED ({args.max_consec_losses}-loss brake)")
+                trades_today = args.max_per_day
+                continue
             result = adjusted_trade_result(
                 sim_trade(df, idx, direction, entry_px, vol_mode=vol_mode, level_name=level_name),
                 skipped_day_reasons,
@@ -1784,7 +1798,7 @@ def run_backtest():
                 level_type_losses[level_name] = level_type_losses.get(level_name, 0) + 1
                 consec_losses_count += 1
                 if args.max_consec_losses > 0 and consec_losses_count >= args.max_consec_losses:
-                    skip_next_day = True
+                    skip_next_trade = True
                 day_consec_losses += 1
                 if args.intraday_stop_after > 0 and day_consec_losses >= args.intraday_stop_after:
                     trades_today = args.max_per_day
@@ -1806,7 +1820,6 @@ def run_backtest():
             day_trades = trades[-trades_today:]
             if all(t['exit_reason'] == 'stop' for t in day_trades):
                 skip_next_day = True
-
     nets = [t['net_pts'] for t in trades]
     wins = [n for n in nets if n > 0]
     rrs  = [t['realized_rr'] for t in trades if t['net_pts'] > 0]
@@ -1884,10 +1897,10 @@ def run_backtest():
         print(f"  Vol mode days:        {total_vol_days} total — {', '.join(parts)}")
     if args.skipped_day_mode and any(skipped_day_counts.values()):
         parts = [f"{k}:{v}" for k, v in skipped_day_counts.items() if v]
-        print(f"  Skipped-day mode days: {', '.join(parts)}")
+        print(f"  High-risk discretion days: {', '.join(parts)}")
     if args.research_target_report:
         print(f"\n  Research target post-filter:")
-        print_summary_line("no first skipped / no pre-8 shorts", summarize_trades(research_target_trades(trades)))
+        print_summary_line("no first high-risk / no pre-8 shorts", summarize_trades(research_target_trades(trades)))
     if args.walk_forward_report:
         print_walk_forward_report(trades)
     if args.require_correlation and not corr_data:

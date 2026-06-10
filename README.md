@@ -13,7 +13,7 @@ backtest.
 
 ### Sessions
 - **Primary**: 7:30am–1:00pm ET (8 MNQ contracts, 10 MNQ 10–11am power hour)
-- **Afternoon**: 2:00–3:00pm ET (6 MNQ contracts)
+- **Afternoon**: 2:00–4:00pm ET (6 MNQ contracts)
 
 ### Levels
 EQH / EQL / OR5L / OB_HIGH / OB_LOW / PML / PDVPOC / 4H_LOW
@@ -33,19 +33,21 @@ EQH / EQL / OR5L / OB_HIGH / OB_LOW / PML / PDVPOC / 4H_LOW
 
 ### Loss Control
 - 1 intraday loss -> end session (`--intraday_stop_after 1`)
-- 3 consecutive losses across days -> skip next day (`--max_consec_losses 3`)
+- 4 consecutive losses across days -> skip the next qualified setup and stand down for that day (`--max_consec_losses 4`)
 
-### Default Skipped-Day Mode
+### Default High-Risk Discretion Mode
 By default, the bot trades high-impact news days, high prior-range days, and
 cross-day loss-control cooldown days instead of skipping them. Those formerly
-skipped days use tighter rules:
+skipped days are now treated as **high-risk discretion days** and use tighter
+rules:
 
-- `--skipped_day_mode`: enabled by default; use `--no-skipped_day_mode` for the old pure-skip baseline
-- `--skipped_day_skip_first_signal`: enabled by default; ignore the first qualifying skipped-day signal
-- `--skipped_day_longs_only`: enabled by default; only take long setups on skipped days
-- `--skipped_day_no_shorts_before 08:00`: block early skipped-day shorts by default
-- `--skipped_day_size_multiplier 0.5`: half-size skipped-day trades for more drawdown cushion
-- `--news_slippage_multiplier 2`: stress-test news-day trades with heavier slippage
+- `--skipped_day_mode`: compatibility flag for high-risk discretion mode; enabled by default
+- `--no-skipped_day_mode`: old pure-skip baseline, where those days are not traded
+- `--skipped_day_skip_first_signal`: enabled by default; ignore the first qualifying high-risk-day signal
+- `--skipped_day_longs_only`: enabled by default; only take long setups on high-risk days
+- `--skipped_day_no_shorts_before 08:00`: block early high-risk-day shorts by default
+- `--skipped_day_size_multiplier 1.0`: full-size high-risk-day trades by default
+- `--news_slippage_multiplier 1.0`: normal modeled slippage by default
 - `--research_target_report`: print the `$716k` post-filter research target
 
 ### First-Signal Quality Gates
@@ -65,11 +67,11 @@ Default verified backtest (Nov 2025 – May 2026 on MNQ, 8/6 contract schedule):
 
 | Metric | Value |
 |--------|-------|
-| Trades | 529 |
-| Win Rate | 84.9% |
-| Profit Factor | 28.41 |
-| Total P&L | +$720,049 |
-| Max Drawdown | $1,843 |
+| Trades | 526 |
+| Win Rate | 84.8% |
+| Profit Factor | 29.43 |
+| Total P&L | +$727,223 |
+| Max Drawdown | $1,552 |
 
 ### Legacy Pure-Skip Baseline
 
@@ -85,7 +87,7 @@ To reproduce the old baseline that truly skips news/high-vol/cooldown days, add
 | Per Month | +$113,517 |
 | Max Drawdown | $1,736 |
 
-Half-size skipped-day mode (`--skipped_day_size_multiplier 0.5`):
+Half-size high-risk discretion mode (`--skipped_day_size_multiplier 0.5`):
 
 | Metric | Value |
 |--------|-------|
@@ -98,8 +100,8 @@ Half-size skipped-day mode (`--skipped_day_size_multiplier 0.5`):
 The earlier `$716,551 / 85.2% WR / PF 31.33 / $1,348 MaxDD` result came from a
 post-hoc research filter on an already-generated trade log:
 
-- remove skipped-day shorts before 8:00am ET
-- remove skipped-day first trades
+- remove high-risk-day shorts before 8:00am ET
+- remove high-risk-day first trades
 
 That exact legacy number remains a historical post-hoc trade-log result. The
 repo now includes `--research_target_report` so the same idea can be measured
@@ -114,12 +116,12 @@ source pass and applying that report prints:
 | Total P&L | +$730,235 |
 | Max Drawdown | $1,736 |
 
-The executable skipped-day mode above is still the honest command-line trading
-implementation.
+The executable high-risk discretion mode above is still the honest command-line
+trading implementation.
 
 ### Previous Default Comparison
 
-To reproduce the previous skipped-day default without the first-trade ratio
+To reproduce the previous high-risk discretion default without the first-trade ratio
 gate, add `--first_signal_min_ratio 0`:
 
 | Metric | Value |
@@ -133,7 +135,7 @@ gate, add `--first_signal_min_ratio 0`:
 The first-trade ratio gate improved profit, win rate, profit factor, and
 drawdown on the verified data, so it is now the default.
 
-News slippage stress on skipped-day mode (`--news_slippage_multiplier 2`):
+News slippage stress on high-risk discretion mode (`--news_slippage_multiplier 2`):
 
 | Metric | Value |
 |--------|-------|
@@ -166,24 +168,12 @@ No Level 2 data required.
 # Install dependencies
 pip install -r requirements.txt
 
-# Run default improved skipped-day backtest
-python3 james_strategy.py --file sample_data/NQ_1m_footprint.csv \
-    --contracts 8 \
-    --level_tol 20 --min_ratio 3.0 --eqh_eql_orl_only \
-    --trend_lookback 2 --skip_news --skip_high_vol \
-    --max_consec_losses 3 --or5l_trail --or5l_trail_after 100 \
-    --or5l_trail_stop 15 --long_bias --poc_position_gate \
-    --pdvpoc --pdh_pdl --premarket_levels --four_hr_levels \
-    --session_start_mins -120 --session_end_mins 210 \
-    --afternoon_start_mins 270 --afternoon_end_mins 330 \
-    --afternoon_contracts 6 --power_hour_contracts 10 \
-    --intraday_stop_after 1 \
-    --eqh_trim1=30 --eqh_trim2=55 \
-    --ob_high_trim1=45 --ob_high_trim2=85 \
-    --ob_low_trim1=45 --ob_low_trim2=85 \
-    --pml_trim1=35 --pml_trim2=60 \
-    --four_hr_low_trim1=45 --four_hr_low_trim2=85
+# Run default high-risk discretion backtest
+python3 james_strategy.py
 ```
+
+The default command expects `sample_data/NQ_1m_footprint.csv` and uses the
+verified 8 MNQ / 10 MNQ power-hour / 6 MNQ afternoon setup.
 
 To run the old pure-skip baseline, add `--no-skipped_day_mode`.
 
